@@ -61,6 +61,15 @@ struct game_state
 
 	int32 *nCounts;
 
+	real32 *positions;
+	int64 positionsSizeInBytes;
+
+	int32 *colorMods;
+	int64 colorModsSizeInBytes;
+
+	GLuint ssboPositions;
+	GLuint ssboColors;
+
 	AABB cellBounds;
 
 	real32 timer;

@@ -116,6 +116,16 @@ extern "C" GAME_INITIALIZE_RENDERER(GameInitializeRenderer)
     gs->aliveTexture = DEBUGLoadBitmap("../textures/alive_01.tga", readFile);
     gs->deadTexture = DEBUGLoadBitmap("../textures/dead_01.tga", readFile);
 
+    glGenBuffers(1, &gs->ssboPositions);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, gs->ssboPositions);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, gs->positionsSizeInBytes, gs->positions, GL_DYNAMIC_DRAW);
+
+    glGenBuffers(1, &gs->ssboColors);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, gs->ssboColors);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, gs->colorModsSizeInBytes, gs->colorMods, GL_DYNAMIC_DRAW);
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
     // NOTE: initialize view(camera)
     gs->viewUni = glGetUniformLocation(g_shader_program, "g_view");
     glUniformMatrix4fv(gs->viewUni, 1, GL_FALSE, glm::value_ptr(gs->viewMat));
@@ -173,6 +183,27 @@ extern "C" GAME_INITIALIZATION(GameInitialization)
         }
     }
 
+    // NOTE: Precalculate positions for instancing in the shader
+    int32 cellCount = gs->cellStatesA.size;
+    gs->positionsSizeInBytes = sizeof(real32) * cellCount * 2;
+    assert(gs->positions = PushArray(&gs->worldArena, cellCount * 2, real32));
+    int32 curIndex = 0;
+    for (int32 y = 0; y < maxY; ++y)
+    {
+        for (int32 x = 0; x < maxX; ++x)
+        {
+            gs->positions[curIndex++] = x * gs->cellWidth + (gs->cellWidth / 2);
+            gs->positions[curIndex++] = y * gs->cellWidth + (gs->cellWidth / 2);
+        }
+    }
+
+    gs->colorModsSizeInBytes = sizeof(int32) * cellCount;
+    assert(gs->colorMods = PushArray(&gs->worldArena, cellCount, int32));
+    for (int32 i = 0; i < cellCount; ++i)
+    {
+        gs->colorMods[i] = gs->cellStatesA.ptr[i];
+    }
+
     if (!GameInitializeRenderer(window, gameMemory, gs))
     {
         game_log(true, "failed to initialize renderer\n");
@@ -212,7 +243,7 @@ play_sound(uint32 sourceID)
 }
 
 internal bool32
-is_valid_cell(cell_state_array *cell, int32 x, int32 y, int32 width, int32 height)
+is_valid_cell(int32 x, int32 y, int32 width, int32 height)
 {
     return !(x > width - 1 || y > height - 1 || x < 0 || y < 0);
 }
@@ -220,7 +251,7 @@ is_valid_cell(cell_state_array *cell, int32 x, int32 y, int32 width, int32 heigh
 internal bool32
 get_cell_state(cell_state_array *cell, int32 x, int32 y, int32 width, int32 height)
 {
-    if (!is_valid_cell(cell, x, y, width, height)) return false;
+    if (!is_valid_cell(x, y, width, height)) return false;
     int32 index = width * y + x;
     if (index < 0 || (index > (width * height - 1))) return false;
     return cell->ptr[index];
@@ -230,25 +261,25 @@ internal void
 set_cell(
     bool32 value, cell_state_array *cells, int32 *nCounts, int32 x, int32 y, int32 width, int32 height)
 {
-	int32 index = width * y + x;
-	if(cells->ptr[index] == value) return;
+    int32 index = width * y + x;
+    if (cells->ptr[index] == value) return;
 
-	cells->ptr[index] = value;
-	if(!nCounts) return;
+    cells->ptr[index] = value;
+    if (!nCounts) return;
 
-	int32 increment = (value ? 1 : -1);
+    int32 increment = (value ? 1 : -1);
 
-	for(int32 i = 0; i < NEIGHBOR_COUNT; ++i)
-	{
-		int32 curX = x + g_neighbor_grid[i][0];	
-		int32 curY = y + g_neighbor_grid[i][1];	
-		if(is_valid_cell(cells, curX, curY, width, height))
-		{
-			int32 curIndex = width * curY + curX;
-			nCounts[curIndex] += increment;
-			if(nCounts[curIndex] < 0) nCounts[curIndex] = 0;
-		}
-	}
+    for (int32 i = 0; i < NEIGHBOR_COUNT; ++i)
+    {
+        int32 curX = x + g_neighbor_grid[i][0];
+        int32 curY = y + g_neighbor_grid[i][1];
+        if (is_valid_cell(curX, curY, width, height))
+        {
+            int32 curIndex = width * curY + curX;
+            nCounts[curIndex] += increment;
+            if (nCounts[curIndex] < 0) nCounts[curIndex] = 0;
+        }
+    }
 }
 
 internal void
@@ -263,10 +294,10 @@ update_cells(cell_state_array *cur, cell_state_array *succ, int32 *nCounts, int3
             bool32 *succCell = &succ->ptr[index];
 
             if (!(*curCell) && !nCounts[index])
-			{
-				*succCell = *curCell;
-				continue;
-			}
+            {
+                *succCell = *curCell;
+                continue;
+            }
 
             int32 nCount = 0;
             for (int32 i = 0; i < NEIGHBOR_COUNT; ++i)
@@ -277,13 +308,13 @@ update_cells(cell_state_array *cur, cell_state_array *succ, int32 *nCounts, int3
             }
 
             if (nCount < 2 && *curCell)
-                set_cell(false, succ, nCounts, x, y, width, height); 
+                set_cell(false, succ, nCounts, x, y, width, height);
             else if (nCount > 3 && *curCell)
-                set_cell(false, succ, nCounts, x, y, width, height); 
+                set_cell(false, succ, nCounts, x, y, width, height);
             else if (nCount == 3 && !(*curCell))
-                set_cell(true, succ, nCounts, x, y, width, height); 
+                set_cell(true, succ, nCounts, x, y, width, height);
             else
-                set_cell(*curCell, succ, nCounts, x, y, width, height); 
+                set_cell(*curCell, succ, nCounts, x, y, width, height);
         }
     }
 }
@@ -312,6 +343,16 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
             otherCells = &gs->cellStatesB;
         }
         update_cells(gs->currentCellState, otherCells, gs->nCounts, maxX, maxY);
+
+        for (int32 i = 0; i < (maxX * maxY); ++i)
+        {
+            gs->colorMods[i] = gs->currentCellState->ptr[i];
+        }
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, gs->ssboColors);
+        void *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
+        memcpy(p, gs->colorMods, sizeof(int32) * (maxX * maxY));
+        glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
 
         gs->timer = 0.0f;
     }
@@ -347,18 +388,29 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
                     {
                         int32 curX = x + g_neighbor_grid[i][0];
                         int32 curY = y + g_neighbor_grid[i][1];
-                        if (is_valid_cell(gs->currentCellState, curX, curY, maxX, maxY))
+                        if (is_valid_cell(curX, curY, maxX, maxY))
                         {
-							set_cell(true, &gs->cellStatesA, gs->nCounts, curX, curY, maxX, maxY);
-							set_cell(true, &gs->cellStatesA, NULL, curX, curY, maxX, maxY);
+                            set_cell(true, &gs->cellStatesA, gs->nCounts, curX, curY, maxX, maxY);
+                            set_cell(true, &gs->cellStatesA, NULL, curX, curY, maxX, maxY);
                         }
                     }
                 }
             }
 
-            Renderer::gl_draw_textured(gs->cellVerts.vao, glm::vec3(xPos, yPos, 0), tex);
+            //            Renderer::gl_draw_textured(gs->cellVerts.vao, glm::vec3(xPos, yPos, 0), tex);
         }
     }
+
+#if 1
+    glBindBuffer(GL_ARRAY_BUFFER, gs->cellVerts.vao);
+    glBindTexture(GL_TEXTURE_2D, gs->deadTexture);
+    gl_apply_default_attributes(&g_default_vert_attributes);
+
+    glm::mat4 model = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, 0.0f));
+    glUniformMatrix4fv(g_uniModel, 1, GL_FALSE, glm::value_ptr(model));
+    glUniform4f(g_uniFrame, 0.0f / 64.0f, 0.0f / 64.0f, 1.0f, 1.0f);
+    glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, maxX * maxY);
+#endif
 
     Renderer::gl_draw(window);
 }
