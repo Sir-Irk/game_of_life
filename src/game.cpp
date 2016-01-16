@@ -344,15 +344,12 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
         }
         update_cells(gs->currentCellState, otherCells, gs->nCounts, maxX, maxY);
 
-        for (int32 i = 0; i < (maxX * maxY); ++i)
         {
-            gs->colorMods[i] = gs->currentCellState->ptr[i];
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, gs->ssboColors);
+            void *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
+            memcpy(p, otherCells->ptr, sizeof(int32) * (maxX * maxY));
+            glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
-
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, gs->ssboColors);
-        void *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
-        memcpy(p, gs->colorMods, sizeof(int32) * (maxX * maxY));
-        glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
 
         gs->timer = 0.0f;
     }
