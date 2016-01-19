@@ -34,16 +34,19 @@ struct cell
 
 struct cell_state_array
 {
-	bool32 *ptr;
-	int32 size;
+    bool32 *ptr;
+    int32 size;
 };
 
 #define NEIGHBOR_COUNT 8
-global const int32 g_neighbor_grid[8][2] = 
+global const int32 g_neighbor_grid[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0},
+                                            {1, 0},   {-1, 1}, {0, 1},  {1, 1}};
+
+struct grid_t
 {
-	{-1, -1}, {0, -1}, {1, -1},
-	{-1,  0},          {1,  0},
-	{-1,  1}, {0,  1}, {1,  1}
+    Renderer::vertex_array_data verts;
+    int32 width;
+    int32 height;
 };
 
 struct game_state
@@ -51,29 +54,31 @@ struct game_state
     memory_arena worldArena;
     input_state input;
     Renderer::vertex_array_data cellVerts;
-	uint32 aliveTexture;
-	uint32 deadTexture;
-	int32 cellWidth;
+    uint32 aliveTexture;
+    uint32 deadTexture;
+    int32 cellWidth;
 
-	cell_state_array cellStatesA;
-	cell_state_array cellStatesB;
-	cell_state_array *currentCellState;
+    cell_state_array cellStatesA;
+    cell_state_array cellStatesB;
+    cell_state_array *currentCellState;
 
-	int32 *nCounts;
+    int32 *nCounts;
 
-	real32 *positions;
-	int64 positionsSizeInBytes;
+    real32 *positions;
+    int64 positionsSizeInBytes;
 
-	int32 *colorMods;
-	int64 colorModsSizeInBytes;
+    int32 *colorMods;
+    int64 colorModsSizeInBytes;
 
-	GLuint ssboPositions;
-	GLuint ssboColors;
+    grid_t grid;
 
-	AABB cellBounds;
+    GLuint ssboPositions;
+    GLuint ssboColors;
 
-	real32 timer;
-	real32 delay;
+    AABB cellBounds;
+
+    real32 timer;
+    real32 delay;
 
     glm::vec3 viewPos;
     glm::mat4 viewMat;
@@ -118,5 +123,12 @@ internal bool32 game_initialize_memory(game_state **gameState, game_memory *game
 internal bool32 start_new_log(char *filename);
 internal void log_to_console(char *filename, const char *message, va_list argptr);
 internal bool32 log_to_file(char *filename, const char *message, va_list argptr);
+
+inline bool32
+is_valid_cell(int32 x, int32 y, int32 width, int32 height)
+{
+    return !(x > width - 1 || y > height - 1 || x < 0 || y < 0);
+}
+
 internal bool32 get_cell_state(cell_state_array *cell, int32 x, int32 y, int32 width, int32 height);
 #endif

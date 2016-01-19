@@ -35,9 +35,13 @@ Clampf(real32 current, real32 min, real32 max)
 inline int32
 Roundf(real32 num)
 {
+#if 0
     // TODO: replace this with better round.
     int32 truncation = (int32)num;
     return (num - truncation >= 0.5f) ? truncation + 1 : truncation;
+#else
+    return (int32)roundf(num);
+#endif
 }
 
 inline real32
@@ -62,6 +66,15 @@ Mod(int32 x, int32 factor)
 }
 
 inline int32
+ClampMod(int32 x, int32 mod)
+{
+    int32 result = x;
+    int32 modded = Mod(x, mod);
+    result += (modded >= mod) ? (mod - modded) : -modded;
+    return result;
+}
+
+inline int32
 RoundMod(real32 x, int32 mod)
 {
     int32 result = x;
@@ -75,11 +88,11 @@ RoundMod(real32 x, int32 mod)
 inline real32
 rotation_clamp(real32 rot)
 {
-	real32 result = rot;
+    real32 result = rot;
     if (rot > 360.0f)
         result -= 360.0f;
     else if (rot < 0.0f)
         result += 360.0f;
-	return result;
+    return result;
 }
 #endif

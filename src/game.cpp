@@ -116,6 +116,7 @@ extern "C" GAME_INITIALIZE_RENDERER(GameInitializeRenderer)
     gs->aliveTexture = DEBUGLoadBitmap("../textures/alive_01.tga", readFile);
     gs->deadTexture = DEBUGLoadBitmap("../textures/dead_01.tga", readFile);
 
+    // NOTE: shader storage buffers used for storing position and color state. Used for instancing
     glGenBuffers(1, &gs->ssboPositions);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, gs->ssboPositions);
     glBufferData(GL_SHADER_STORAGE_BUFFER, gs->positionsSizeInBytes, gs->positions, GL_DYNAMIC_DRAW);
@@ -125,6 +126,12 @@ extern "C" GAME_INITIALIZE_RENDERER(GameInitializeRenderer)
     glBufferData(GL_SHADER_STORAGE_BUFFER, gs->colorModsSizeInBytes, gs->colorMods, GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    // NOTE: debug grid array buffer.
+    glGenBuffers(1, &gs->grid.verts.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, gs->grid.verts.vao);
+    glBufferData(GL_ARRAY_BUFFER, gs->grid.verts.size * sizeof(real32), gs->grid.verts.data,
+                 GL_STATIC_DRAW);
 
     // NOTE: initialize view(camera)
     gs->viewUni = glGetUniformLocation(g_shader_program, "g_view");
@@ -141,7 +148,7 @@ extern "C" GAME_INITIALIZATION(GameInitialization)
 
     game_state *gs = *gameState;
 
-    gs->cellWidth = 8;
+    gs->cellWidth = 2;
     int32 maxX = (SCREEN_WIDTH / gs->cellWidth) - 1;
     int32 maxY = SCREEN_HEIGHT / gs->cellWidth;
     gs->cellStatesA.size = gs->cellStatesB.size = maxX * maxY;
@@ -204,6 +211,53 @@ extern "C" GAME_INITIALIZATION(GameInitialization)
         gs->colorMods[i] = gs->cellStatesA.ptr[i];
     }
 
+    // NOTE: Init grid for debug purposes
+    gs->grid.width = maxX + 1;
+    gs->grid.height = maxY + 1;
+    gs->grid.verts.size = (gs->grid.width * 2 + gs->grid.height * 2) * G_DEFAULT_QUAD_FLOATS_PER_VERTICE;
+    assert(gs->grid.verts.data = PushArray(&gs->worldArena, gs->grid.verts.size, real32));
+
+    {
+        real32 *v = gs->grid.verts.data;
+        int32 i = 0;
+        int32 w = gs->cellWidth;
+        int32 h = gs->cellWidth;
+
+        for (int32 p = 0; p < gs->grid.width; ++p)
+        {
+            v[i++] = w * p - w / 2;    // first X pos
+            v[i++] = 0.0f - h / 2;     // first Y pos
+            v[i++] = 1.0f;             // r
+            v[i++] = 1.0f;             // g
+            v[i++] = 1.0f;             // b
+            i += 2;                    // skip texture coordinates
+                                       //
+            v[i++] = w * p - w / 2;    // second X pos
+            v[i++] = h * maxY - h / 2; // second Y pos
+            v[i++] = 1.0f;             // r
+            v[i++] = 1.0f;             // g
+            v[i++] = 1.0f;             // b
+            i += 2;                    // skip texture coordinates
+        }
+
+        for (int32 p = 0; p < gs->grid.height; ++p)
+        {
+            v[i++] = 0.0f - w / 2;     // first X pos
+            v[i++] = h * p - h / 2;    // first Y pos
+            v[i++] = 1.0f;             // r
+            v[i++] = 1.0f;             // g
+            v[i++] = 1.0f;             // b
+            i += 2;                    // skip texture coordinates
+                                       //
+            v[i++] = w * maxX - w / 2; // second X pos
+            v[i++] = h * p - h / 2;    // second Y pos
+            v[i++] = 1.0f;             // r
+            v[i++] = 1.0f;             // g
+            v[i++] = 1.0f;             // b
+            i += 2;                    // skip texture coordinates
+        }
+    }
+
     if (!GameInitializeRenderer(window, gameMemory, gs))
     {
         game_log(true, "failed to initialize renderer\n");
@@ -240,12 +294,6 @@ play_sound(uint32 sourceID)
 {
     alSourcePlay(sourceID);
     return true;
-}
-
-internal bool32
-is_valid_cell(int32 x, int32 y, int32 width, int32 height)
-{
-    return !(x > width - 1 || y > height - 1 || x < 0 || y < 0);
 }
 
 internal bool32
@@ -329,6 +377,7 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
     int32 maxX = (SCREEN_WIDTH / gs->cellWidth) - 1;
     int32 maxY = SCREEN_HEIGHT / gs->cellWidth;
 
+    // gs->delay = 2.0f;
     if ((gs->timer += fixedDeltaTime) > gs->delay)
     {
         cell_state_array *otherCells = NULL;
@@ -342,12 +391,13 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
             gs->currentCellState = &gs->cellStatesA;
             otherCells = &gs->cellStatesB;
         }
+
         update_cells(gs->currentCellState, otherCells, gs->nCounts, maxX, maxY);
 
         {
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, gs->ssboColors);
             void *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
-            memcpy(p, otherCells->ptr, sizeof(int32) * (maxX * maxY));
+            if (p) memcpy(p, otherCells->ptr, sizeof(int32) * (maxX * maxY));
             glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
         }
 
@@ -363,42 +413,32 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
 
     gs->viewMat = glm::translate(glm::mat4(), gs->viewPos);
     glUniformMatrix4fv(gs->viewUni, 1, GL_FALSE, glm::value_ptr(gs->viewMat));
+    mouse->worldPosition = mouse->position - vector2::from_glm_vec3(gs->viewPos);
 
-    int32 xPos = 0, yPos = 0;
-    for (int32 y = 0; y < maxY; ++y)
     {
-        for (int32 x = 0; x < maxX; ++x)
+        if (mouseButtonPressed)
         {
-            uint32 tex =
-                ((gs->currentCellState->ptr[y * maxX + x]) ? gs->aliveTexture : gs->deadTexture);
-            xPos = (gs->cellWidth * x) + gs->cellWidth / 2;
-            yPos = (gs->cellWidth * y) + gs->cellWidth / 2;
+            vector2 mPos = mouse->worldPosition;
+            int32 xPos = ClampMod(mPos.x, gs->cellWidth);
+            int32 yPos = ClampMod(mPos.y, gs->cellWidth);
+            int32 iX = xPos / gs->cellWidth;
+            int32 iY = yPos / gs->cellWidth;
 
-            if (mouseButtonPressed)
+            if (is_valid_cell(iX, iY, maxX, maxY))
             {
-                mouse->worldPosition = mouse->position - vector2::from_glm_vec3(gs->viewPos);
-                if (AABB_contains(gs->cellBounds + vector2(xPos, yPos), mouse->worldPosition))
+                set_cell(true, &gs->cellStatesA, gs->nCounts, iX, iY, maxX, maxY);
+                set_cell(true, &gs->cellStatesB, NULL, iX, iY, maxX, maxY);
+                for (int32 i = 0; i < NEIGHBOR_COUNT; ++i)
                 {
-                    gs->cellStatesA.ptr[maxX * y + x] = true;
-                    gs->cellStatesB.ptr[maxX * y + x] = true;
-                    for (int32 i = 0; i < NEIGHBOR_COUNT; ++i)
-                    {
-                        int32 curX = x + g_neighbor_grid[i][0];
-                        int32 curY = y + g_neighbor_grid[i][1];
-                        if (is_valid_cell(curX, curY, maxX, maxY))
-                        {
-                            set_cell(true, &gs->cellStatesA, gs->nCounts, curX, curY, maxX, maxY);
-                            set_cell(true, &gs->cellStatesA, NULL, curX, curY, maxX, maxY);
-                        }
-                    }
+                    int32 curX = iX + g_neighbor_grid[i][0];
+                    int32 curY = iY + g_neighbor_grid[i][1];
+                    if (is_valid_cell(curX, curY, maxX, maxY))
+                        set_cell(true, &gs->cellStatesA, gs->nCounts, curX, curY, maxX, maxY);
                 }
             }
-
-            //            Renderer::gl_draw_textured(gs->cellVerts.vao, glm::vec3(xPos, yPos, 0), tex);
         }
     }
 
-#if 1
     glBindBuffer(GL_ARRAY_BUFFER, gs->cellVerts.vao);
     glBindTexture(GL_TEXTURE_2D, gs->deadTexture);
     gl_apply_default_attributes(&g_default_vert_attributes);
@@ -407,7 +447,19 @@ extern "C" GAME_UPDATE_AND_RENDER(GameUpdateAndRender)
     glUniformMatrix4fv(g_uniModel, 1, GL_FALSE, glm::value_ptr(model));
     glUniform4f(g_uniFrame, 0.0f / 64.0f, 0.0f / 64.0f, 1.0f, 1.0f);
     glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, maxX * maxY);
-#endif
+
+    {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, gs->ssboColors);
+        void *p = glMapBuffer(GL_SHADER_STORAGE_BUFFER, GL_WRITE_ONLY);
+        if (p)
+        {
+            memcpy(p, gs->cellStatesA.ptr, sizeof(int32) * (maxX * maxY));
+            ((int32 *)p)[0] = 1;
+        }
+        glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+    }
+
+    //    Renderer::gl_draw_lines(&gs->grid.verts);
 
     Renderer::gl_draw(window);
 }
